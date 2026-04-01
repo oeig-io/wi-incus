@@ -5,6 +5,13 @@ description: Instructions for how to configure incus remotes
 
 # Incus Remote Management
 
+## Install Incus Server and Client
+
+https://github.com/zabbly/incus
+
+- for desktop: best to use Stable
+- for server: best to use LTS
+
 ## Add a New Remote Server
 
 On the client - get/generate a certificate. Note this is a public key. It is OK to pass in plain text.
