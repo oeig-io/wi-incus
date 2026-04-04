@@ -1,5 +1,5 @@
 ---
-name: Incus Remote Management
+name: incus-remote-management
 description: Instructions for how to configure incus remotes
 ---
 

@@ -1,5 +1,5 @@
 ---
-name: Incus Container Management
+name: incus-container-management
 description: Instructions for how to configure incus containers
 ---
 
