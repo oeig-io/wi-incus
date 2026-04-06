@@ -1,10 +1,10 @@
 ---
-name: incus-gui-profile
+name: incus-profile-gui
 description: Incus profile configuration for running GUI desktop applications inside containers with X11 and PulseAudio forwarding
 compatibility: opencode
 metadata:
   type: tool
-  original_file: incus-gui-profile-tool.md
+  original_file: incus-profile-gui-tool.md
   category: configuration
   scope: incus
 ---
@@ -120,6 +120,53 @@ incus launch images:debian/13 <container-name> --profile default --profile gui
 
 ```bash
 incus profile add <container-name> gui
+```
+
+## Add Profile to Incus Host
+
+The purpose of this section is to import the GUI profile into your local incus host.
+
+### Option 1: Create from File
+
+Save the profile YAML to a file, then import it:
+
+```bash
+# Save the profile (see GUI Profile Configuration section above) to gui.yaml
+incus profile create gui < gui.yaml
+```
+
+### Option 2: Create Interactively
+
+```bash
+incus profile create gui
+incus profile edit gui
+```
+
+Paste the YAML configuration (from the GUI Profile Configuration section) into the editor.
+
+### Option 3: Set Individual Keys
+
+Create the profile and set each configuration option:
+
+```bash
+incus profile create gui
+incus profile set gui environment.DISPLAY=:1
+incus profile set gui raw.idmap="both 1000 1000"
+incus profile set gui security.nesting=true
+incus profile set gui security.syscalls.intercept.mknod=true
+incus profile set gui security.syscalls.intercept.setxattr=true
+incus profile set gui user.user-data="<cloud-init-data>"
+
+# Add devices
+incus profile device add gui X0 disk path=/mnt/host-x11/ source=/tmp/.X11-unix/
+incus profile device add gui PASocket disk path=/mnt/host-pulse/ source=/run/user/1000/pulse/
+incus profile device add gui mygpu gpu
+```
+
+### Verify Profile
+
+```bash
+incus profile show gui
 ```
 
 ## Key Components Explained
