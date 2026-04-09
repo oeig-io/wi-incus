@@ -12,6 +12,8 @@ This task covers host-level Incus resources:
 - Images
 - Projects
 
+For project creation and configuration, see incus-project-management-tool. For remote access and project-scoped user management, see incus-remote-management-tool.
+
 Container-level management is handled by application-specific tasks (see idempiere-environment-management-task).
 
 ## Host Provisioning
