@@ -190,19 +190,30 @@ incus config device add <vm> install-iso disk \
 > commonly stalls or bluescreens. `boot.priority=10` is required or the firmware
 > boots the empty disk and falls through to PXE.
 
-Run the install across two consoles:
+Start the VM **with the VGA console attached from power-on** so the SPICE viewer
+opens immediately and you can catch the boot prompt on the very first attempt:
 
 ```bash
-incus start <vm> --console     # press a key at "Press any key to boot from CD"
-                               # disconnect the serial console with ctrl+a q
-incus console <vm> --type=vga  # complete the graphical installer
+incus start <vm> --console=vga   # powers on AND attaches the SPICE display
 ```
 
-> ⚠️ **Warning** - `incus console <vm> --type=vga` opens a **SPICE** display and
-> needs a SPICE viewer installed on the machine that runs the command (the operator's
-> workstation, not the server). incus auto-launches `remote-viewer` (from the
-> `virt-viewer` package) or `spicy` (from `spice-gtk`) when present. If neither is
-> installed, incus prints only a raw socket path
+When the `remote-viewer` window appears, **click into it** to grab the keyboard, then
+**hold the spacebar** so key-repeat lands inside the brief "Press any key to boot
+from CD or DVD..." window. Release once "Windows Setup is loading files" / the spinner
+appears, then complete the graphical installer.
+
+> ⚠️ **Warning** - The "Press any key to boot from CD..." prompt is **graphical** — it
+> renders only on the VGA/SPICE display. The serial console (`incus start <vm>
+> --console`, no type) shows *only* the `BdsDxe ... Time out` / PXE-fallback lines and
+> gives you **no way to catch the prompt**, so do not use it for the install. If you
+> miss the prompt, the firmware loops (CD → empty disk → PXE → back to CD), giving
+> unlimited retries — just keep the spacebar held.
+
+> ⚠️ **Warning** - `--console=vga` (like `incus console <vm> --type=vga`) opens a
+> **SPICE** display and needs a SPICE viewer installed on the machine that runs the
+> command (the operator's workstation, not the server). incus auto-launches
+> `remote-viewer` (from the `virt-viewer` package) or `spicy` (from `spice-gtk`) when
+> present. If neither is installed, incus prints only a raw socket path
 > (`spice+unix:///.../sockets/<id>.spice`) and no window opens. Install a viewer first:
 >
 > | Workstation OS | Install command |
