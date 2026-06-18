@@ -181,6 +181,8 @@ incus init <vm> --empty --vm \
   -c limits.cpu=4 -c limits.memory=8GiB -d root,size=64GiB \
   -c security.secureboot=true -c image.os=Windows
 
+incus config device add <vm> vtpm tpm
+
 incus config device add <vm> install-iso disk \
   pool=<pool> source=win11-25h2-incus boot.priority=10
 ```
@@ -189,6 +191,13 @@ incus config device add <vm> install-iso disk \
 > devices, uses local-time RTC, and switches IOMMU handling. Without it Windows 11
 > commonly stalls or bluescreens. `boot.priority=10` is required or the firmware
 > boots the empty disk and falls through to PXE.
+>
+> ⚠️ **Warning** - Windows 11 requires TPM 2.0 and will halt at setup if it is
+> absent. The `vtpm` device above provides a software TPM (swtpm) to the VM.
+> Verify `swtpm` is installed on the Incus host before attempting the install.
+> If Windows reports "No TPM found" despite the device being present, the EDK2/OVMF
+> firmware on the host may not perform the PCR measurements Windows expects — this
+> is an upstream issue; try updating Incus or the host firmware package.
 
 Start the VM **with the VGA console attached from power-on** so the SPICE viewer
 opens immediately and you can catch the boot prompt on the very first attempt:
