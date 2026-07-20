@@ -80,7 +80,7 @@ host loop devices. A **VM** has its own kernel and full loop support, so it is t
 only reliable place to run the repack.
 
 ```bash
-incus launch images:nixos/25.11 repack-vm --vm \
+incus launch images:nixos/26.05 repack-vm --vm \
   -c limits.cpu=4 -c limits.memory=6GiB \
   -c security.secureboot=false \
   -d root,size=50GiB
