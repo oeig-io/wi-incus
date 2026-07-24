@@ -11,176 +11,104 @@ metadata:
 
 # Incus Linux Desktop VM Tool
 
-The purpose of this tool is to enable a desktop environment inside an Incus **virtual machine** (not a container) and connect to its graphical console.
+The purpose of this tool is to get you into a COSMIC desktop login screen inside an Incus **virtual machine** (not a container) as fast as possible.
 
-This is important because an Incus VM is a separate OS in a separate kernel — a Wayland compositor (like COSMIC) renders to a VGA framebuffer, not to the serial line, so the default `incus console` shows a text getty instead of the greeter. Getting both the config and the connection right is what this skill captures.
+This is important because two non-obvious details block the way: the NixOS COSMIC option paths differ from the wiki's, and the graphical greeter only appears if you attach the VGA console **as the VM boots** — attaching to an already-running VM drops you on a text login instead.
 
-> 📝 **Note** — This skill is intentionally sparse. It is a starting point for documenting Linux desktop-VM scenarios as we encounter them. The COSMIC section below is the first entry; add siblings (GNOME, Plasma, etc.) as they come up.
+> 📝 **Note** — This skill covers COSMIC on NixOS, the first desktop VM we documented. Add sibling `### <DE> (<distro>)` sections as new scenarios come up. For GUI apps in a **container**, use `incus-profile-gui-tool.md`; for a **Windows** VM, use `incus-windows-tool.md`.
 
-## TOC
+## Launch the VM
 
-- [Scope and Siblings](#scope-and-siblings)
-- [Console Types: VGA vs Serial](#console-types-vga-vs-serial)
-- [COSMIC (NixOS)](#cosmic-nixos)
-  - [Enable cosmic-store (Flatpak)](#enable-cosmic-store-flatpak)
-  - [Create a login user (NixOS)](#create-a-login-user-nixos)
-  - [Connect to the COSMIC greeter](#connect-to-the-cosmic-greeter)
-  - [Verify the option exists on your channel](#verify-the-option-exists-on-your-channel)
-- [Future Scenarios](#future-scenarios)
-- [References](#references)
+A NixOS `--vm` needs **both** `security.secureboot=false` and `security.nesting=true` to launch — omit either and the VM never comes up. Everything else (profile, memory, CPU, disk) is machine-specific sizing and contributes nothing to COSMIC.
 
-## Scope and Siblings
+```bash
+incus launch images:nixos/26.05 cosmic-01 --vm \
+  -c security.secureboot=false \
+  -c security.nesting=true \
+  -c limits.memory=6GiB -c limits.cpu=2 \
+  -d root,size=30GiB
+```
 
-This skill covers **Linux** desktop VMs. Sibling skills cover adjacent ground and should be used instead where they fit:
+> 📝 **Note** — `incus-windows-tool.md` owns the `security.secureboot=false` requirement for the NixOS VM image; this skill adds that `security.nesting=true` is also required to launch.
 
-| Need | Use |
-|------|-----|
-| GUI apps inside a **container** (X11/PulseAudio forwarding) | `incus-profile-gui-tool.md` |
-| A **Windows** VM install from a repacked ISO | `incus-windows-tool.md` |
-| A **Linux** desktop VM (COSMIC, …) | this skill |
+## The three critical lines
 
-The line is the instance type: `incus-profile-gui` is for containers; this skill is for VMs (`incus launch … --vm`, or `incus info` showing `VIRTUAL-MACHINE`).
-
-## Console Types: VGA vs Serial
-
-An Incus VM exposes two consoles:
-
-| Console | Command | What it shows |
-|---------|---------|---------------|
-| Serial | `incus console <vm>` (default) | Text only — kernel and getty on `ttyS0`. A graphical greeter will **never** appear here. |
-| VGA | `incus console <vm> --type vga` | The graphical framebuffer — where a Wayland greeter renders. This is how you see a desktop login. |
-
-If you see a "Welcome to NixOS … tty1" text login on the VGA console, the greeter did **not** take over VT 1 and agetty fell back to a text login — see the scenario sections for why and how to confirm.
-
-## COSMIC (NixOS)
-
-### Enable COSMIC
-
-On NixOS, COSMIC is enabled with two options. Use these exact paths — the NixOS wiki shows shorthand `services.cosmic.*`, but the actual merged module (nixpkgs PR #267099) registers the options under the conventional `services.desktopManager.*` and `services.displayManager.*` namespaces. The wiki paths fail with `The option 'services.cosmic' does not exist.`
+On NixOS, enable COSMIC with these exact option paths and add Flatpak so the app store installs:
 
 ```nix
-services.desktopManager.cosmic.enable = true;
+services.desktopManager.cosmic.enable = true;      # COSMIC desktop + greeter
 services.displayManager.cosmic-greeter.enable = true;
+services.flatpak.enable = true;                    # gates cosmic-store (the Flathub app browser)
 ```
 
-Do **not** also enable a competing desktop or display manager (`services.xserver.desktopManager.gnome`, `services.displayManager.gdm`, `sddm`, `lightdm`) — they will fight the cosmic-greeter.
+Then `sudo nixos-rebuild switch`.
 
-A minimal `configuration.nix` for a NixOS-in-Incus VM (includes `services.flatpak.enable` for cosmic-store — see [Enable cosmic-store (Flatpak)](#enable-cosmic-store-flatpak)):
+- **Use these paths, not the wiki's `services.cosmic.*`** — the merged nixpkgs module (PR #267099) registers under the conventional `services.desktopManager.*` / `services.displayManager.*` namespaces. The wiki shorthand fails with `The option 'services.cosmic' does not exist.`
+- **`cosmic-store` is gated on Flatpak.** It lives in a `lib.optionals config.services.flatpak.enable […]` block, so without `services.flatpak.enable` the app store is missing. The other COSMIC apps (files, edit, term, settings, launcher) install regardless.
+- **Do not** also enable a competing desktop/display manager (gnome, gdm, sddm, lightdm) — they fight cosmic-greeter.
 
-```nix
-{ modulesPath, ... }:
-
-{
-  imports = [
-    "${modulesPath}/virtualisation/incus-virtual-machine.nix"
-    ./incus.nix
-  ];
-
-  # COSMIC desktop
-  services.desktopManager.cosmic.enable = true;
-  services.displayManager.cosmic-greeter.enable = true;
-
-  # Enables cosmic-store (the COSMIC Flatpak/Flathub app browser)
-  services.flatpak.enable = true;
-
-  networking = {
-    dhcpcd.enable = false;
-    useDHCP = false;
-    useHostResolvConf = false;
-  };
-
-  systemd.network = {
-    enable = true;
-    networks."50-enp5s0" = {
-      matchConfig.Name = "enp5s0";
-      networkConfig = {
-        DHCP = "ipv4";
-        IPv6AcceptRA = true;
-      };
-      linkConfig.RequiredForOnline = "routable";
-    };
-  };
-
-  system.stateVersion = "26.05";
-}
-```
-
-### Enable cosmic-store (Flatpak)
-
-`cosmic-store` (the COSMIC app store — a GUI for browsing/installing Flatpak apps from Flathub) is **gated on Flatpak** in the nixpkgs COSMIC module: it lives in a `lib.optionals config.services.flatpak.enable [ … cosmic-store ]` block, not the always-installed `corePkgs`. A bare `services.desktopManager.cosmic.enable = true` therefore leaves `cosmic-store` missing. The other COSMIC apps (`cosmic-files`, `cosmic-edit`, `cosmic-term`, `cosmic-settings`, `cosmic-launcher`, app library, applets) are **not** gated — they install automatically.
-
-The config line (`services.flatpak.enable = true;`) is already in the [minimal `configuration.nix`](#enable-cosmic) above; rebuild with `sudo nixos-rebuild switch`.
-
-Then add the Flathub remote — a runtime command, not a NixOS option. The NixOS wiki and `lilyinstarlight/nixos-cosmic` README prescribe per-user (`--user`) scope; use the system form only if you want a shared remote:
+Add the Flathub remote once (runtime command, not a NixOS option) so `cosmic-store` can browse Flathub:
 
 ```bash
-# Per-user (documented pattern)
 flatpak remote-add --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-
-# System-wide (shared remote across all users)
-sudo flatpak remote-add flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 ```
 
-After the remote is added, `cosmic-store` appears in the COSMIC app library and can browse/install from Flathub.
+## Create a login user
 
-### Create a login user (NixOS)
+The greeter needs an account to log into. Create one imperatively — see
+`wi-nixos/nixos-best-practices-tool.md` → "Creating Users as Data (Imperative useradd)".
 
-The greeter needs an account to log into. On NixOS, create one **imperatively as data** — the `/bin/bash`-doesn't-exist gotcha bites here, so use the resolved shell path:
+## Connect: cold-start with the VGA console
 
-```bash
-sudo useradd -m -s "$(which bash)" dummyuser
-echo 'dummyuser:changeme' | sudo chpasswd
-```
-
-This persists across reboots and `nixos-rebuild switch` (NixOS defaults to `mutableUsers = true`). Do **not** also declare the user in `configuration.nix`, or the rebuild will overwrite the password.
-
-> 🔗 **Reference** — `wi-nixos/nixos-best-practices-tool.md` → "Creating Users as Data (Imperative useradd)" for the full `mutableUsers` behavior and the declarative-vs-imperative decision.
-
-### Connect to the COSMIC greeter
-
-After `nixos-rebuild switch`, attach the **VGA** console and **cold-cycle** the VM so you catch the greeter from boot. Attaching to an already-running VM with `incus console … --type vga` can land you on the tty1 getty fallback if the greeter has already tried and the framebuffer state is stale:
+This is the piece that made the login screen appear. Attach the VGA console **on start**, not after boot:
 
 ```bash
 incus stop cosmic-01
 incus start cosmic-01 --console=vga
 ```
 
-`--console=vga` on `start` attaches the VGA console immediately as the VM boots, so you see the kernel messages and then the cosmic-greeter login screen replace the text VT.
+`--console=vga` attaches the graphical framebuffer as the VM boots, so the kernel messages give way to the cosmic-greeter login. The default `incus console <vm>` is the **serial** console (text getty on `ttyS0`) — a graphical greeter never appears there. Attaching `incus console … --type vga` to an already-running VM can strand you on the tty1 text-login fallback.
 
-If you still land on the tty1 text login after a clean cold boot, the greeter genuinely failed to start — confirm over the serial console:
+If you still land on a text login after a clean cold boot, the greeter genuinely failed — confirm over serial (`incus console cosmic-01`, `Ctrl-q` to detach):
 
 ```bash
-incus console cosmic-01            # serial; Ctrl-q to detach
-# after login:
 systemctl status display-manager.service
 journalctl -b -u display-manager.service --no-pager | tail -50
-journalctl -b --no-pager | grep -iE 'cosmic|smithay|drm|egl|vulkan' | tail -40
 ```
 
-A `display-manager.service` that is `failed` or `inactive` with renderer/EGL/DRM errors in the journal means cosmic-comp could not get a graphical context in the VM. That is a VM-GPU limitation (no `virgl` 3D acceleration, no working DRM render node), not a config error — and the practical answer is usually to test COSMIC on bare metal instead.
+Renderer/EGL/DRM errors mean cosmic-comp could not get a graphical context — a VM-GPU limitation (no `virgl` 3D, no working DRM render node), not a config error. The practical answer is to test COSMIC on bare metal.
 
-### Verify the option exists on your channel
+## Remote desktop over NetBird — state of affairs (2026-07-24)
 
-```bash
-nixos-option services.desktopManager.cosmic.enable
-nixos-option services.displayManager.cosmic-greeter.enable
-```
+The use case: the remote host runs COSMIC and is joined to NetBird, the user's machine is joined to NetBird, and the user opens ordinary remote-desktop software and logs into the remote COSMIC desktop over its NetBird address — **no Incus client, no SPICE-over-API bridge**. This needs a remote-desktop *server* listening inside the VM on a NetBird-reachable TCP port.
 
-Both should return `false` (the default). If `nixos-option` is deprecated on your channel, a successful `nixos-rebuild switch` is itself confirmation.
+As of this date there is **no vanilla/upstream way to serve a stock COSMIC session over RDP or VNC.** COSMIC's compositor does not yet expose the `org.freedesktop.portal.RemoteDesktop` portal (pop-os/xdg-desktop-portal-cosmic #23, still open), and that portal is what a remote-desktop server needs for input injection. Consequently:
 
-## Future Scenarios
+- **wayvnc** targets wlroots compositors; `cosmic-comp` is smithay-based and lacks the virtual-pointer protocol wayvnc needs (pop-os/cosmic-comp #2094) — not reliable.
+- **xrdp** requires an X11 session; COSMIC is Wayland-only, so xrdp cannot launch a COSMIC session.
+- **gnome-remote-desktop** relies on the RemoteDesktop portal — it will not drive COSMIC.
 
-Intentionally sparse. Add a new `### <DE> (<distro>)` section under here for each Linux desktop-VM scenario we document (GNOME on NixOS, Plasma on Debian, etc.), keeping the same shape: enable options, connect pattern, failure-mode notes.
+Three paths exist today:
+
+| Path | Fits the use case? | Notes |
+|------|--------------------|-------|
+| `cosmic-ext-rdp-server` (olafkfreund) | Yes, natively | RDP server on `:3389` for Remmina/FreeRDP/`mstsc`; PAM, TLS; ships a NixOS module. **Experimental** — requires a forked compositor (`cosmic-comp-rdp`) and forked portal, replacing core COSMIC components. v0.3.0, single maintainer. |
+| GNOME headless RDP (`gnome-remote-desktop`) or KDE + KRDP | Yes, on a **different** DE | Mature, listens on `:3389`, any RDP client connects to the VM's NetBird address. Drops COSMIC for the remote use case. |
+| SPICE via the Incus client (`incus console --type vga`) | No | Requires the Incus client on the user's machine — see [Connect: cold-start with the VGA console](#connect-cold-start-with-the-vga-console). Fine for admins, not the end-user use case above. |
+
+All of these still ride on `cosmic-comp` getting a graphical context in the VM — the same VM-GPU limitation noted above applies.
 
 ## References
 
-- NixOS COSMIC wiki page (note: uses shorthand `services.cosmic.*`, not the real option paths): https://wiki.nixos.org/wiki/COSMIC
-- nixpkgs COSMIC module source: `nixos/modules/services/desktop-managers/cosmic.nix` in `NixOS/nixpkgs`
-- Merge PR (option paths landed here): https://github.com/NixOS/nixpkgs/pull/267099
-- Tracking issue: https://github.com/NixOS/nixpkgs/issues/259641
+- NixOS COSMIC wiki (note: shows shorthand `services.cosmic.*`, not the real paths): https://wiki.nixos.org/wiki/COSMIC
+- nixpkgs merge PR (real option paths): https://github.com/NixOS/nixpkgs/pull/267099
 - Incus console how-to: https://linuxcontainers.org/incus/docs/main/howto/instances_console/
-- Sibling: GUI apps in containers — `incus-profile-gui-tool.md`
-- Sibling: Windows VM install — `incus-windows-tool.md`
+- SPICE is Incus-API-only, no per-VM port (maintainer confirmation): https://discuss.linuxcontainers.org/t/vm-on-headless-unbuntu-server-connecting-windows-spice-client-for-vga-console/13544
+- Remote SPICE via the Incus client (confirmed working): https://discuss.linuxcontainers.org/t/remote-viewer-for-vm-console-spice-over-ip/21480
+- COSMIC RemoteDesktop portal gap (open): https://github.com/pop-os/xdg-desktop-portal-cosmic/issues/23
+- Experimental COSMIC RDP server (NixOS module): https://github.com/olafkfreund/cosmic-ext-rdp-server
+- Login user creation — `wi-nixos/nixos-best-practices-tool.md`
+- Sibling tools — `incus-profile-gui-tool.md` (containers), `incus-windows-tool.md` (Windows VM)
 - Authoring standard — `wi-base/WORK_INSTRUCTIONS.md`
 
 Tags: #tool #incus #vm #desktop #cosmic #nixos
