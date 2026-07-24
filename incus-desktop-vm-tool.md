@@ -22,6 +22,9 @@ This is important because an Incus VM is a separate OS in a separate kernel — 
 - [Scope and Siblings](#scope-and-siblings)
 - [Console Types: VGA vs Serial](#console-types-vga-vs-serial)
 - [COSMIC (NixOS)](#cosmic-nixos)
+  - [Create a login user (NixOS)](#create-a-login-user-nixos)
+  - [Connect to the COSMIC greeter](#connect-to-the-cosmic-greeter)
+  - [Verify the option exists on your channel](#verify-the-option-exists-on-your-channel)
 - [Future Scenarios](#future-scenarios)
 - [References](#references)
 
@@ -97,6 +100,19 @@ A minimal `configuration.nix` for a NixOS-in-Incus VM:
   system.stateVersion = "26.05";
 }
 ```
+
+### Create a login user (NixOS)
+
+The greeter needs an account to log into. On NixOS, create one **imperatively as data** — the `/bin/bash`-doesn't-exist gotcha bites here, so use the resolved shell path:
+
+```bash
+sudo useradd -m -s "$(which bash)" dummyuser
+echo 'dummyuser:changeme' | sudo chpasswd
+```
+
+This persists across reboots and `nixos-rebuild switch` (NixOS defaults to `mutableUsers = true`). Do **not** also declare the user in `configuration.nix`, or the rebuild will overwrite the password.
+
+> 🔗 **Reference** — `wi-nixos/nixos-best-practices-tool.md` → "Creating Users as Data (Imperative useradd)" for the full `mutableUsers` behavior and the declarative-vs-imperative decision.
 
 ### Connect to the COSMIC greeter
 
