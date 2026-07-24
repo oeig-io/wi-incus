@@ -61,14 +61,11 @@ On NixOS, COSMIC is enabled with two options. Use these exact paths — the NixO
 ```nix
 services.desktopManager.cosmic.enable = true;
 services.displayManager.cosmic-greeter.enable = true;
-
-# Enables cosmic-store (the COSMIC Flatpak/Flathub app browser) — see [Enable cosmic-store](#enable-cosmic-store-flatpak)
-services.flatpak.enable = true;
 ```
 
 Do **not** also enable a competing desktop or display manager (`services.xserver.desktopManager.gnome`, `services.displayManager.gdm`, `sddm`, `lightdm`) — they will fight the cosmic-greeter.
 
-A minimal `configuration.nix` for a NixOS-in-Incus VM:
+A minimal `configuration.nix` for a NixOS-in-Incus VM (includes `services.flatpak.enable` for cosmic-store — see [Enable cosmic-store (Flatpak)](#enable-cosmic-store-flatpak)):
 
 ```nix
 { modulesPath, ... }:
@@ -110,21 +107,11 @@ A minimal `configuration.nix` for a NixOS-in-Incus VM:
 
 ### Enable cosmic-store (Flatpak)
 
-`cosmic-store` (the COSMIC app store, a GUI for browsing/installing Flatpak apps from Flathub) is **gated on Flatpak** in the nixpkgs COSMIC module — it lives in a `lib.optionals config.services.flatpak.enable [ … cosmic-store ]` block, not in the always-installed `corePkgs` list. A bare `services.desktopManager.cosmic.enable = true` therefore does **not** install it; `cosmic-store` is missing until Flatpak is enabled.
+`cosmic-store` (the COSMIC app store — a GUI for browsing/installing Flatpak apps from Flathub) is **gated on Flatpak** in the nixpkgs COSMIC module: it lives in a `lib.optionals config.services.flatpak.enable [ … cosmic-store ]` block, not the always-installed `corePkgs`. A bare `services.desktopManager.cosmic.enable = true` therefore leaves `cosmic-store` missing. The other COSMIC apps (`cosmic-files`, `cosmic-edit`, `cosmic-term`, `cosmic-settings`, `cosmic-launcher`, app library, applets) are **not** gated — they install automatically.
 
-The other COSMIC applications (`cosmic-files`, `cosmic-edit`, `cosmic-term`, `cosmic-settings`, `cosmic-launcher`, app library, applets) are **not** gated — they are in `corePkgs` and install automatically with the two COSMIC enable lines above. Only `cosmic-store` is conditional.
+The config line (`services.flatpak.enable = true;`) is already in the [minimal `configuration.nix`](#enable-cosmic) above; rebuild with `sudo nixos-rebuild switch`.
 
-Add the config line (already shown in the minimal config above) and rebuild:
-
-```nix
-services.flatpak.enable = true;
-```
-
-```bash
-sudo nixos-rebuild switch
-```
-
-Then add the Flathub remote — a runtime command, not a NixOS option. The NixOS wiki and `lilyinstarlight/nixos-cosmic` README prescribe per-user (`--user`) scope so each user manages their own Flathub profile; use the system form only if you specifically want a shared remote:
+Then add the Flathub remote — a runtime command, not a NixOS option. The NixOS wiki and `lilyinstarlight/nixos-cosmic` README prescribe per-user (`--user`) scope; use the system form only if you want a shared remote:
 
 ```bash
 # Per-user (documented pattern)
