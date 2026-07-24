@@ -76,7 +76,7 @@ systemctl status display-manager.service
 journalctl -b -u display-manager.service --no-pager | tail -50
 ```
 
-Renderer/EGL/DRM errors mean cosmic-comp could not get a graphical context — a VM-GPU limitation (no `virgl` 3D, no working DRM render node), not a config error. The practical answer is to test COSMIC on bare metal.
+> 📝 **Note** — The Incus VM has no `virgl` 3D, so `cosmic-comp` logs renderer/EGL/DRM messages such as `Unable to become drm master, assuming unprivileged mode` and `Preferred format … not available: NoSupportedPlaneFormat`. These are **non-fatal fallback warnings** from COSMIC's software-render path, not evidence of failure — observed runs render the greeter, accept login, and run apps (e.g. Firefox) despite them. Treat only a text-login fallback on a clean cold boot as a genuine greeter failure (see the serial check above), not these log lines.
 
 ## Remote desktop over NetBird — state of affairs (2026-07-24)
 
