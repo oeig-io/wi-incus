@@ -1,6 +1,6 @@
 ---
 name: incus-windows
-description: Install Windows in an incus VM using a driver-injected (repacked) ISO volume — reuse an existing project-scoped volume when present, or build and publish one with distrobuilder when not
+description: Install Windows in an incus VM using a driver-injected (repacked) ISO volume — reuse an existing project-scoped volume when present, or build and publish one with distrobuilder when not — plus the TPM 2.0 (vtpm), local-account, and guest-driver steps a Windows 11 install needs
 compatibility: opencode
 metadata:
   type: tool
@@ -28,6 +28,13 @@ This is important because a stock Microsoft ISO does not contain virtio drivers,
   - [Import Into the First Project](#import-into-the-first-project)
   - [Copy to Additional Projects](#copy-to-additional-projects)
 - [Install Windows From the Volume](#install-windows-from-the-volume)
+  - [Create the VM](#create-the-vm)
+  - [TPM 2.0 Is Required](#tpm-20-is-required)
+  - [Boot the Installer](#boot-the-installer)
+  - [Finish Setup Without a Microsoft Account](#finish-setup-without-a-microsoft-account)
+- [After Install](#after-install)
+  - [Install Guest Drivers](#install-guest-drivers)
+  - [Protect the VM From Deletion](#protect-the-vm-from-deletion)
 - [Cleanup](#cleanup)
 
 ## Decide: Build or Use
@@ -174,11 +181,13 @@ See `incus-project-management` for project concepts.
 
 ## Install Windows From the Volume
 
+### Create the VM
+
 Create an empty VM and attach the repacked ISO as a bootable CD-ROM:
 
 ```bash
 incus init <vm> --empty --vm \
-  -c limits.cpu=4 -c limits.memory=8GiB -d root,size=64GiB \
+  -c limits.cpu=4 -c limits.memory=8GiB -d root,size=128GiB \
   -c security.secureboot=true -c image.os=Windows
 
 incus config device add <vm> vtpm tpm
@@ -191,13 +200,38 @@ incus config device add <vm> install-iso disk \
 > devices, uses local-time RTC, and switches IOMMU handling. Without it Windows 11
 > commonly stalls or bluescreens. `boot.priority=10` is required or the firmware
 > boots the empty disk and falls through to PXE.
->
-> ⚠️ **Warning** - Windows 11 requires TPM 2.0 and will halt at setup if it is
-> absent. The `vtpm` device above provides a software TPM (swtpm) to the VM.
-> Verify `swtpm` is installed on the Incus host before attempting the install.
-> If Windows reports "No TPM found" despite the device being present, the EDK2/OVMF
-> firmware on the host may not perform the PCR measurements Windows expects — this
-> is an upstream issue; try updating Incus or the host firmware package.
+
+> 💡 **Tip** - The root disk is the one size worth over-provisioning: 64GiB is the
+> Microsoft minimum and fills up once Windows Update and Office land, and a root disk
+> cannot be shrunk afterward. Start at 128GiB or more.
+
+### TPM 2.0 Is Required
+
+Windows 11 setup halts without TPM 2.0. The bare `vtpm tpm` device above hands the VM a
+software TPM (swtpm); together with `security.secureboot=true` and `image.os=Windows`
+that is the combination verified against Windows 11 Pro here.
+
+> ⚠️ **Warning** - Do **not** add `path=/dev/tpm0` to a VM's tpm device. `path` and
+> `pathrm` are container-only settings naming the device nodes bind-mounted into a
+> container; incus accepts them on a VM and then ignores them. Recipes carrying
+> `path=/dev/tpm0` succeed in spite of it, not because of it — a VM reaches its TPM
+> through a swtpm socket incus creates on its own.
+
+> ⚠️ **Warning** - `swtpm` must be installed on the **incus host** (the server), not on
+> the operator's workstation. Without it the VM refuses to start with
+> `Failed to validate environment: Required tool 'swtpm' is missing`.
+
+> ⚠️ **Warning** - Removing the vtpm device **destroys the TPM state** — incus deletes
+> the device's state directory, so the guest boots with a blank TPM: BitLocker drops to
+> the recovery-key prompt and Windows Hello PINs are gone. Renaming the device does the
+> same, because the state is keyed to the device name. Never "remove and re-add the
+> vtpm" as a troubleshooting step on a VM already in use.
+
+> 📝 **Note** - If Windows reports "No TPM found" despite the device being present, the
+> host's EDK2/OVMF firmware may not perform the PCR measurements Windows expects — an
+> upstream issue; try updating incus or the host firmware package.
+
+### Boot the Installer
 
 Start the VM **with the VGA console attached from power-on** so the SPICE viewer
 opens immediately and you can catch the boot prompt on the very first attempt:
@@ -232,12 +266,51 @@ appears, then complete the graphical installer.
 > | Debian/Ubuntu | `sudo apt install virt-viewer` |
 > | Fedora/RHEL | `sudo dnf install virt-viewer` |
 
-The virtio disk is visible immediately because the drivers are baked in. After the
-install finishes, detach the ISO so the VM boots from disk:
+> 💡 **Tip** - To reattach the display to an **already running** VM, use
+> `incus console <vm> --type=vga`. `incus start --console=vga` only works from a
+> stopped VM.
+
+The virtio disk is visible immediately because the drivers are baked in.
+
+### Finish Setup Without a Microsoft Account
+
+Current Windows 11 Pro builds offer no visible local-account path and dead-end at
+"Let's add your Microsoft account". Bypass it from the installer itself:
+
+1. [ ] At the Microsoft account screen, press **Shift+F10** to open a command prompt
+1. [ ] Run `ms-cxh:localonly`
+1. [ ] Enter the local user name, password, and security questions
+
+Setup then completes to the desktop. Detach the ISO so the VM boots from disk:
 
 ```bash
 incus storage volume detach <pool> win11-25h2-incus <vm>
 ```
+
+## After Install
+
+### Install Guest Drivers
+
+Windows boots with a low fixed resolution until guest drivers are installed. Attach the
+same `virtio-win.iso` used for the repack as a second CD-ROM (see
+`incus-disk-management`) or download it inside the guest, then run its guest-tools
+installer and reboot.
+
+> ⚠️ **Warning** - SPICE Guest Tools alone does **not** fix the display in our VMs; the
+> virtio-win guest tools do. Install virtio-win first, and add SPICE Guest Tools only
+> for the extras it provides (clipboard and folder sharing).
+
+### Protect the VM From Deletion
+
+A Windows VM is hand-built and cannot be recreated from an image, so guard it once the
+install is good:
+
+```bash
+incus config set <vm> security.protection.delete=true
+incus config get <vm> security.protection.delete   # expect: true
+```
+
+Clear it deliberately (`=false`) only when deletion is the confirmed intent.
 
 ## Cleanup
 
