@@ -150,6 +150,18 @@ incus copy <source> <target> --instance-only
 
 Copying a **running** instance is fine; Incus snapshots it internally. Real cost tracks used space, not the disk's declared size.
 
+> ⚠️ **Warning** - **Look at what is scheduled to fire before you copy.** The copy itself is atomic, so a job running mid-copy cannot corrupt the source or the clone's kept data. What it does do is capture that job's *partial working state* — a half-written staging directory, a temp file whose cleanup handler will never run on the clone because the process does not continue there — and compete for I/O with the job on an instance you care about. Neither is dangerous; both make the clone messier and the copy slower.
+
+```bash
+# What is armed, when it last ran, and what fires next
+incus exec <source> -- systemctl list-timers --all
+
+# Is anything heavy running right now?
+incus exec <source> -- systemctl list-units --type=service --state=running
+```
+
+Prefer a window with no imminent fire. When one is close, either wait it out or expect to tidy the clone afterward — and say which you chose when you report the clone. This is a courtesy check, not a gate: do not build a hard refusal around it, because a gate on a non-safety issue only teaches people to bypass gates.
+
 > ⚠️ **Warning** - **A copy inherits the source's instance config.** Anything that must differ has to be set *explicitly* — never inferred from absence. The trap is `security.protection.delete`: clone a protected production singleton and the clone arrives protected too, so a script that only sets the flag "when asked" silently produces protected clones. State the intended value on every path, then verify it.
 
 ```bash
@@ -171,6 +183,9 @@ Scrub each of these **while the clone is stopped**. Deleting a regenerable artif
 | `/etc/machine-id` | systemd identity; duplicates confuse journald and DHCP | systemd, on next boot |
 | Stored credentials (e.g., a `.pgpass`, API keys, service tokens) | **Inherited credentials are inherited identity.** They still authenticate against the *source's* systems | Nothing — rotation is phase 2 work |
 | Application-level production flags | A clone that believes it is production hardens its UI and arms guards meant for the real system | Nothing — must be set deliberately |
+| Scheduled jobs (e.g., a `systemd` backup timer) | **An armed timer fires on the clone too.** It writes real data — including anything it dumps, such as credentials — onto a box that phase 2 has not yet sanitized, and burns disk on a throwaway | Nothing — deactivation is phase 2 work |
+
+**A declaratively-defined scheduled job cannot be switched off imperatively.** On a config-managed host (NixOS `wantedBy = [ "timers.target" ]`, or any unit a config manager owns), `systemctl disable` is undone by the next rebuild — and clone scripts commonly *run* a rebuild to reconcile the clone's rendered state. Deactivation therefore has to be declarative, which on NixOS means importing an override module on the clone; see the `nixos-best-practices` skill for why an added module stays inert until it is wired.
 
 Stopping the service on the source is **not** equivalent to scrubbing. A mesh client's `down` verb stops the tunnel and deliberately leaves the identity on disk so a later `up` needs no new key. That surviving identity is exactly what a clone inherits — see the `netbird-connect` skill for the NetBird specifics.
 
