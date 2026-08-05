@@ -23,9 +23,10 @@ Authoring and formatting follow `wi-base/WORK_INSTRUCTIONS.md`.
 - `incus-container-management-tool.md` — configure containers
 - `incus-disk-management-tool.md` — map a host disk into a container, and
   observe ZFS disk usage across the shared storage pool
-- `incus-instance-clone-tool.md` — clone an instance and scrub the runtime
-  identity it inherits before first boot; also how to read or edit a **stopped**
-  container's filesystem offline
+- `incus-instance-clone-tool.md` — clone an instance and scrub the identity and
+  outbound credentials it inherits before first boot; the authority for
+  authoring and auditing a repo's clone script; also how to read or edit a
+  **stopped** container's filesystem offline
 - `incus-profile-gui-tool.md` — run GUI desktop apps in a container (X11, audio)
 - `incus-project-management-tool.md` — projects with dedicated networks/profiles
 - `incus-remote-management-tool.md` — remotes and project-scoped user access

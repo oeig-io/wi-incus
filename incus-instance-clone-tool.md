@@ -1,6 +1,6 @@
 ---
 name: incus-instance-clone
-description: Clone an Incus instance and scrub the runtime identity it inherits before first boot, so the copy cannot impersonate its source or rejoin a mesh/VPN. Also the way to read or edit any STOPPED container's filesystem offline. Use when copying a production container, when a clone must not join a network as its source, or when a container will not boot and needs an offline fix.
+description: Clone an Incus instance and scrub the identity and outbound credentials it inherits before first boot, so the copy cannot impersonate its source or write to the source's external systems. Also the authority for authoring and auditing a repo's clone script, and the way to read or edit any STOPPED container's filesystem offline. Use when copying a production container, when a clone must not join a network or push to a backup target as its source, or when a container will not boot and needs an offline fix.
 compatibility: opencode
 metadata:
   type: tool
@@ -14,38 +14,52 @@ metadata:
 ## TOC
 
 - [Summary](#summary)
-- [Two Phases: Machine Identity, Then Sanitization](#two-phases-machine-identity-then-sanitization)
+- [Three Phases: Identity, Authority, Sanitization](#three-phases-identity-authority-sanitization)
 - [Check for a Dedicated Clone Script First](#check-for-a-dedicated-clone-script-first)
 - [Naming Clones](#naming-clones)
 - [Land Clones in Their Own Project](#land-clones-in-their-own-project)
 - [Offline Access to a Stopped Instance](#offline-access-to-a-stopped-instance)
 - [Copy Flags That Matter](#copy-flags-that-matter)
 - [What a Clone Inherits](#what-a-clone-inherits)
-- [Scrub Data, Never Shadow Config](#scrub-data-never-shadow-config)
+- [Subtract, Never Shadow](#subtract-never-shadow)
+- [All-or-Nothing Artifact](#all-or-nothing-artifact)
 - [Verify the Clone](#verify-the-clone)
+- [Clone Script Checklist](#clone-script-checklist)
 
 ## Summary
 
-The purpose of this tool is to produce an Incus clone that is a *new* machine rather than a second copy of an existing one, and to give you offline access to a stopped container's filesystem.
+The purpose of this tool is to produce an Incus clone that is a *new* machine which cannot act as its source, to govern the clone script a repo ships, and to give you offline access to a stopped container's filesystem.
 
-This is important because `incus copy` reproduces the source's **runtime identity** along with its software. Peer keys, SSH host keys, machine IDs, and credentials were established once, by hand or by a daemon, and nothing regenerates them just because the volume was duplicated. Boot such a clone unmodified and it authenticates to your infrastructure *as the source* — joining a mesh under the source's key, answering to the source's SSH fingerprint, or claiming to be a production system. Scrubbing happens **before first boot**, because the damage is done in the first few seconds of the daemon starting.
+This is important because `incus copy` reproduces the source's **identity and its authority** along with its software. Peer keys, SSH host keys, machine IDs, credentials, and armed timers were established once, by hand or by a daemon, and nothing regenerates or disarms them just because the volume was duplicated. Boot such a clone unmodified and it authenticates to your infrastructure *as the source* — joining a mesh under the source's key, answering to the source's SSH fingerprint, or pushing `--delete` into the source's backup tree unattended. Scrubbing happens **before first boot**, because the damage is done in the first few seconds of the daemons starting.
 
-## Two Phases: Machine Identity, Then Sanitization
+This skill is the authority for both writing and auditing a clone script. [Clone Script Checklist](#clone-script-checklist) is the contract; every other section explains one of its lines.
 
-Cloning has two distinct phases with different owners. Conflating them is how a clone ends up looking finished while still being unsafe.
+## Three Phases: Identity, Authority, Sanitization
+
+Cloning has three distinct phases with different owners. Conflating them is how a clone ends up looking finished while still being unsafe.
 
 | Phase | Makes it | Scope | Owner |
 |-------|----------|-------|-------|
 | **1 · Machine identity** | a distinct *machine* | peer identity, SSH host keys, machine-id, hostname, production flags | generic — this skill |
-| **2 · Application sanitization** | a safe *non-production system* | credential rotation, PII obfuscation, environment badging, integration credentials, background processors | application-specific — the owning repo |
+| **2 · Egress authority** | a machine that cannot *act as* the source | outbound credentials, destination config, armed schedules | the *test* is generic — the *inventory* belongs to the owning repo |
+| **3 · Application sanitization** | a safe *non-production* system | credential rotation, PII obfuscation, environment badging, background processors | application-specific — the owning repo |
 
-**Phase 1 completing does not make a clone safe to expose.** A clone that has passed phase 1 is still holding the source's database passwords, un-obfuscated production data, and production badging. Say so explicitly when you report a clone as ready, so nobody infers more safety than was delivered.
+Phases 1 and 2 point in opposite directions, and the asymmetry is what makes phase 2 easy to miss:
+
+| | Damage shape | Regenerated by |
+|---|---|---|
+| **Phase 1 — inbound** | others mistake the clone *for* the source | the platform, on next boot — deletion is complete and safe |
+| **Phase 2 — outbound** | the clone writes to real systems *as* the source | **nothing** — deletion is permanent, and restoring it means re-provisioning |
+
+Because phase 1 artifacts are platform-owned, they form a finite list this skill can carry. Phase 2 artifacts are whatever the application was given, so no list can be complete — which is why phase 2 ships a *test* instead (see [What a Clone Inherits](#what-a-clone-inherits)).
+
+**A clone that has passed phases 1 and 2 is still not sanitized.** It holds the source's database passwords, un-obfuscated production data, and production badging. Say so explicitly when you report a clone as ready, so nobody infers more safety than was delivered.
 
 ## Check for a Dedicated Clone Script First
 
 ⚠️ **Warning** - Before cloning any long-lived or production instance, look for a clone script that its owning repo ships. Ad-hoc cloning of an instance that has one will miss steps that repo knows about and you do not.
 
-A generic clone handles what is generic. An application-specific instance carries more — an application-level production flag, a licence registration, a scheduled job that writes to a shared destination. Only the owning repo knows that list.
+A generic clone handles what is generic. An application-specific instance carries more — an application-level production flag, a licence registration, a credential that writes to a shared destination. Only the owning repo knows that list.
 
 Check in this order:
 
@@ -58,6 +72,8 @@ Check in this order:
 | `idempiere-00` (production iDempiere) | `host-idempiere/clone.sh` |
 
 > 📝 **Note** - Add a row when a repo gains a clone script, so the next actor finds it instead of improvising.
+
+Authoring a new one, or changing the payload an existing one clones, is governed by [Clone Script Checklist](#clone-script-checklist).
 
 ## Naming Clones
 
@@ -77,8 +93,6 @@ Incus enforces its own rules on instance names (`shared/validate.IsHostname`), s
 | Charset | letters, digits, `-` only — **no underscores, no dots** |
 | Must not start or end with | `-` |
 | Must not be | only digits |
-
-63 characters is generous: `idempiere-clone-uat-01` is 22, leaving 41 for a longer label.
 
 ## Land Clones in Their Own Project
 
@@ -132,6 +146,8 @@ umount "${TMPDIR:-/tmp/$USER}/rootfs"
 
 > ⚠️ **Warning** - `incus storage volume file ...` looks like the same capability but is **not**. It only serves `type=custom` volumes; against an instance rootfs it fails or resolves the wrong volume. Use `incus file ...` for instances.
 
+> ⚠️ **Warning** - `incus file delete` exits non-zero both when the file was **absent** and when the delete **failed**. A scrub helper that treats every non-zero as "absent" reports success for a permissions error, a typo'd path, or a broken SFTP session — blinding the one check that proves the scrub happened. Classify the failure: only a not-found-shaped message is "absent"; anything else is fatal.
+
 Scratch mount points belong under your private `TMPDIR`, never bare `/tmp` — see the `host-ai-user` shared-`/tmp` standard.
 
 ## Copy Flags That Matter
@@ -144,71 +160,91 @@ incus copy <source> <target> --instance-only
 |------|------|
 | `--instance-only` | **Normally yes.** Omits the source's snapshots; without it every source snapshot is copied and carries the source's name. |
 | `--target-project <p>` | **Normally yes.** Lands the clone in its own project — see above. |
-| `--no-profiles` | **Only when you want an isolated clone with no NIC.** It is *not* the safety mechanism and is not the default. |
-
-`--no-profiles` is easy to over-reach for. The scrub is protected by the clone being **stopped** — a NIC merely *defined* on a stopped container carries no traffic. Withholding the network protects nothing during the scrub and only adds a step afterward. Use it when a permanently networkless clone is the goal, not as caution.
+| `--no-profiles` | **Only when a permanently networkless clone is the goal.** It is *not* the scrub's safety mechanism — see [All-or-Nothing Artifact](#all-or-nothing-artifact) for what protects the window and what protects the residue. |
 
 Copying a **running** instance is fine; Incus snapshots it internally. Real cost tracks used space, not the disk's declared size.
 
-> ⚠️ **Warning** - **Look at what is scheduled to fire before you copy.** The copy itself is atomic, so a job running mid-copy cannot corrupt the source or the clone's kept data. What it does do is capture that job's *partial working state* — a half-written staging directory, a temp file whose cleanup handler will never run on the clone because the process does not continue there — and compete for I/O with the job on an instance you care about. Neither is dangerous; both make the clone messier and the copy slower.
+> ⚠️ **Warning** - **A copy inherits the source's instance config.** Anything that must differ has to be set *explicitly* on every path — never inferred from absence. The canonical trap is `security.protection.delete`.
+
+**Delete protection belongs to blessed production singletons, and a clone must never wear it.** A protected clone cannot be rolled back or reaped, so the flag meant to protect production becomes the thing that preserves a half-baked artifact. It is also self-defeating: the flag's entire value is that encountering it makes someone stop, and clones are the population large enough to turn clearing it into muscle memory. This is the config-layer expression of the naming rule — `-00` is refused at the name layer for the same reason.
 
 ```bash
-# What is armed, when it last ran, and what fires next
-incus exec <source> -- systemctl list-timers --all
-
-# Is anything heavy running right now?
-incus exec <source> -- systemctl list-units --type=service --state=running
-```
-
-Prefer a window with no imminent fire. When one is close, either wait it out or expect to tidy the clone afterward — and say which you chose when you report the clone. This is a courtesy check, not a gate: do not build a hard refusal around it, because a gate on a non-safety issue only teaches people to bypass gates.
-
-> ⚠️ **Warning** - **A copy inherits the source's instance config.** Anything that must differ has to be set *explicitly* — never inferred from absence. The trap is `security.protection.delete`: clone a protected production singleton and the clone arrives protected too, so a script that only sets the flag "when asked" silently produces protected clones. State the intended value on every path, then verify it.
-
-```bash
-# State intent explicitly, both ways
-incus --project <p> config set <target> security.protection.delete=false   # disposable clone
+# State intent explicitly, on every path — the source is protected, so silence inherits protection
+incus --project <p> config set <target> security.protection.delete=false
 incus --project <p> config set <target> description="clone of <source> taken YYYY-MM-DD; <purpose>" -p
 ```
 
-Keep delete protection **rare**. Its entire value is that encountering it makes someone stop; if clearing it becomes routine muscle memory it protects nothing, including production. Default clones to unprotected.
+A clone that genuinely must outlive its disposability has been promoted, not cloned: give it its own identity and enable protection by hand, so the person who does it owns it.
+
+> 💬 **Comment** - **Look at what is scheduled to fire before you copy.** The copy is atomic, so a job running mid-copy cannot corrupt the source or the clone's kept data — but it captures that job's *partial working state* (a half-written staging directory, a temp file whose cleanup will never run on the clone) and competes for I/O on an instance you care about. Prefer a quiet window; otherwise expect to tidy the clone, and say which you chose when you report it. This is a courtesy check, not a gate — a gate on a non-safety issue only teaches people to bypass gates.
+
+```bash
+incus exec <source> -- systemctl list-timers --all                          # what is armed, what fires next
+incus exec <source> -- systemctl list-units --type=service --state=running  # anything heavy right now
+```
 
 ## What a Clone Inherits
 
-Scrub each of these **while the clone is stopped**. Deleting a regenerable artifact is correct: the platform recreates it, keyed to the new machine.
+Phase 1's list is finite and generic. Phase 2's is not, so classify every candidate with one question:
 
-| Artifact | Why it must go | Regenerated by |
-|----------|----------------|----------------|
-| Mesh/VPN peer identity (e.g., `/var/lib/netbird/config.json`, `state.json`, `active_profile.json`) | Holds the private key and management URL that let the clone rejoin the mesh **as the source** | Daemon, on next start — fresh key, no registration |
-| SSH host keys (`/etc/ssh/ssh_host_*`) | Any client that trusted the source's fingerprint silently trusts the clone | `sshd` / NixOS activation, on next boot |
-| `/etc/machine-id` | systemd identity; duplicates confuse journald and DHCP | systemd, on next boot |
-| Stored credentials (e.g., a `.pgpass`, API keys, service tokens) | **Inherited credentials are inherited identity.** They still authenticate against the *source's* systems | Nothing — rotation is phase 2 work |
-| Application-level production flags | A clone that believes it is production hardens its UI and arms guards meant for the real system | Nothing — must be set deliberately |
-| Scheduled jobs (e.g., a `systemd` backup timer) | **An armed timer fires on the clone too.** It writes real data — including anything it dumps, such as credentials — onto a box that phase 2 has not yet sanitized, and burns disk on a throwaway | Nothing — deactivation is phase 2 work |
+> **If a process on this clone reads this file, can a system *outside the container* observe a change? If yes, it is egress authority — scrub it.**
 
-**A declaratively-defined scheduled job cannot be switched off imperatively.** On a config-managed host (NixOS `wantedBy = [ "timers.target" ]`, or any unit a config manager owns), `systemctl disable` is undone by the next rebuild — and clone scripts commonly *run* a rebuild to reconcile the clone's rendered state. Deactivation therefore has to be declarative, which on NixOS means importing an override module on the clone; see the `nixos-best-practices` skill for why an added module stays inert until it is wired.
+Scrub each of these **while the clone is stopped**. Deleting a phase 1 artifact is correct: the platform recreates it, keyed to the new machine.
+
+| Artifact | Phase | Why it must go | Regenerated by |
+|----------|-------|----------------|----------------|
+| Mesh/VPN peer identity (e.g., `/var/lib/netbird/config.json`, `state.json`, `active_profile.json`) | 1 | Holds the private key and management URL that let the clone rejoin the mesh **as the source** | Daemon, on next start — fresh key, no registration |
+| SSH host keys (`/etc/ssh/ssh_host_*`) | 1 | Any client that trusted the source's fingerprint silently trusts the clone | `sshd` / NixOS activation, on next boot |
+| `/etc/machine-id` | 1 | systemd identity; duplicates confuse journald and DHCP | systemd, on next boot |
+| Application-level production flags | 1 | A clone that believes it is production hardens its UI and arms guards meant for the real system | Nothing — must be set deliberately |
+| Outbound client keys (e.g., `root`'s `~/.ssh/id_*` used to reach a backup host) | 2 | Authenticate the clone to a **third system** as the source | Nothing |
+| Destination config (e.g., an env file naming the source's remote path) | 2 | Removing the key alone leaves the barrel still aimed; a key later installed by hand inherits the source's target | Nothing |
+| Stored service credentials (`.pgpass`, `.netrc`, API keys, tokens) | 2 / 3 | **Inherited credentials are inherited identity.** Egress now if the service is remote; rotation regardless | Nothing |
+| Armed schedules (e.g., a `systemd` backup timer) | 2 | The **trigger.** Authority alone is latent; a timer turns it into a real unattended write, on a box nothing has sanitized | Nothing — and a rebuild re-arms it, see below |
+
+Two rules keep phase 2 from decaying:
+
+- **Re-provision, never inherit.** A clone that legitimately must push somewhere gets its *own* credential issued deliberately, so it is revocable independently of the source. Never hand it a copy of the source's.
+- **Constrain the far end too.** Per-machine remote accounts and per-machine remote paths mean even a mistaken push cannot land in the source's tree. The scrub is the first layer, not the only one — see the `rsync-net-admin` skill for the machine-principal model.
+
+**A declaratively-defined schedule cannot be switched off imperatively.** On a config-managed host, `systemctl disable` is undone by the next rebuild — and a clone script commonly *runs* a rebuild to reconcile the clone's rendered state, so the script would undo its own disarm. Deactivation has to be declarative; see [Subtract, Never Shadow](#subtract-never-shadow).
 
 Stopping the service on the source is **not** equivalent to scrubbing. A mesh client's `down` verb stops the tunnel and deliberately leaves the identity on disk so a later `up` needs no new key. That surviving identity is exactly what a clone inherits — see the `netbird-connect` skill for the NetBird specifics.
 
 Scrubbing a mesh identity also removes the **management URL**, not just the key. A self-hosted deployment therefore needs it supplied again on the clone (`netbird up --management-url ... --setup-key ...`), or the daemon falls back to the vendor's public default.
 
-**Do not scrub what the platform already fixed.** Incus rewrites what it owns during a copy. On NixOS it regenerates the autogenerated hostname module, so the clone's *declarative* hostname is already correct while the *rendered* `/etc/hostname` is still stale. The fix is to rebuild, not to edit the rendered file — see the next section.
+**Do not scrub what the platform already fixed.** Incus rewrites what it owns during a copy. On NixOS it regenerates the autogenerated hostname module, so the clone's *declarative* hostname is already correct while the *rendered* `/etc/hostname` is still stale. The fix is to rebuild, not to edit the rendered file.
 
-## Scrub Data, Never Shadow Config
+## Subtract, Never Shadow
 
-**Invariant: remove the offending runtime data; never add runtime data that contradicts declarative config.**
+**Invariant: neutralize by removing — the offending data, or the config that declares it. Never add something that contradicts what is already declared.**
 
-On a declaratively-managed host, config is the single source of truth and the files on disk are its output. Two ways to stop a cloned daemon from connecting:
+On a declaratively-managed host, config is the single source of truth and the files on disk are its output. Every artifact a clone must not have falls into one of three layers, and each has exactly one correct move:
 
-| Approach | Verdict |
-|----------|---------|
-| Delete the runtime identity the daemon would have reused | ✅ Correct — restores the state a fresh install would have |
-| Drop in an override file that contradicts the rendered config | ❌ Wrong — declared config and observed behaviour now disagree, with the reason in an unversioned file |
+| Layer | Neutralize by | Never |
+|-------|---------------|-------|
+| Rendered output (`/etc/hostname`, host keys, machine-id) | deleting it — the platform regenerates it | hand-editing it |
+| Credential data (client keys, destination env files) | deleting it — re-provision deliberately if genuinely needed | copying a fresh one from the source |
+| Declarative config (timers, external integrations) | **removing the module's import** | adding an override module that contradicts it |
 
-The second is tempting because it looks like defence in depth. It is drift: the next person reads the config, predicts one behaviour, and gets another. If a clone genuinely must behave differently *by policy*, change the declarative config and rebuild.
+Shadowing is tempting because it looks like defence in depth. It is drift: declared config and observed behaviour now disagree, and the reason lives in a file nobody reads first. An override module is at least declarative, but it splits the clone's truth across two files that must be reasoned about together — subtraction leaves `configuration.nix` telling the whole story.
 
-The same logic applies to stale rendered artifacts. When a clone's hostname is wrong because the rendered file predates the copy, **rebuild to regenerate it** — do not hand-edit. Hand-editing produces the right value with no provenance, and the next rebuild silently reverts it.
+**Compose modules so a clone is defined by what its config omits.** Split the *trigger* out of the *capability*, so removing the trigger leaves the capability intact and runnable by hand:
 
-On NixOS the system enforces this for you: `/etc/hostname` is a symlink into the read-only `/etc/static/` tree, so it cannot be edited at all. When a file resists being written, that is usually the platform telling you it is output rather than input — find the input.
+```
+myapp-backup.nix          # capability: the service. `systemctl start myapp-backup` still works
+myapp-backup-timer.nix    # trigger: systemd.timers + wantedBy = [ "timers.target" ]
+```
+
+A clone removes `myapp-backup-timer.nix` and its import; nothing else changes, and no individual module needs a clone-aware option. Split a module **only where the clone boundary runs** — the split is justified by that boundary, not by taste, or the payload decays into dozens of fragments.
+
+> ⚠️ **Warning** - Subtraction handles config; the scrub still handles data. Removing the timer does not remove the SSH key. Neither layer substitutes for the other.
+
+> ⚠️ **Warning** - Remove the import **first**, then delete the file, and do both **before** the reconciling rebuild. A `configuration.nix` that imports a missing module cannot rebuild at all — so this edit belongs inside the script's roll-back-able window, never as a manual afterthought.
+
+Because subtraction makes a module list load-bearing in three places — the installer that wires modules, the deploy script that verifies they are wired, and the clone script that removes some — keep **one manifest in the repo** that names each module and its clone disposition, and have all three read it. Three independent arrays drift, and the first symptom is a deploy script refusing to rebuild a clone for legitimately lacking a module.
+
+The same logic applies to stale rendered artifacts: when a clone's hostname is wrong because the rendered file predates the copy, **rebuild to regenerate it** — do not hand-edit. On NixOS the system enforces this for you: `/etc/hostname` is a symlink into the read-only `/etc/static/` tree. When a file resists being written, that is usually the platform telling you it is output rather than input — find the input.
 
 > ⚠️ **Warning** - Rebuilding is necessary but **not sufficient** for the hostname. systemd reads `/etc/hostname` once, at boot, to set the running (*transient*) hostname. A clone's first boot therefore adopts the source's name, and `nixos-rebuild switch` then corrects the *static* hostname without touching the transient one. `hostnamectl` reports the split plainly:
 >
@@ -223,26 +259,119 @@ Order matters for anything generated *from* the hostname. Host keys created on t
 
 A clone with no NIC still rebuilds fine. Nix logs failed `cache.nixos.org` lookups and then builds the handful of changed derivations from the local store — the warnings are noise, not failure.
 
-```bash
-# Reconcile rendered state with declarative config (NixOS example)
-incus --project <p> exec <clone> -- sudo nixos-rebuild switch
-```
+## All-or-Nothing Artifact
+
+**Contract: when a clone script exits non-zero, either no container exists, or the one that exists cannot boot onto the network.**
+
+This is important because a clone is only safe while it is *stopped* — and a script that dies has stopped guaranteeing that. What it leaves behind is a startable container holding the source's keys, indistinguishable at a glance from a finished one. `set -euo pipefail` gives you "stop on error", which is not "leave nothing behind".
+
+| Rule | Why |
+|------|-----|
+| **Arm the rollback *before* the copy** | An interrupted copy leaves residue too. The pre-copy guard already proved the target did not exist, so deleting whatever is there is safe. |
+| **Mark the artifact itself** | `user.clone_state=in-progress` at copy time. A trap cannot survive `kill -9`, a host reboot, or a lost connection to the daemon; a marker on the object can, and it is what tells the *next* actor this thing is not finished. Put it in `description` too, since that is what `incus list` shows. |
+| **One commit point, at the end** | Verification passes → marker flips to `complete`. Nothing earlier may look like completion. |
+| **The marker doubles as a mutex** | Refuse to start when any container in the target project is not `complete`, naming it and the reap command. This also settles the number-allocation race, with no shared lock file. |
+| **Warnings are not an exit path** | A boot that never settled, or a production flag that never got demoted, is a failed clone. Downgrading either to a warning and exiting `0` hands back a half-baked artifact that reads as good. Offer an explicit opt-in (`--allow-degraded`) rather than a silent tolerance. |
+| **Verification must be authoritative** | A check that prints `STILL MATCHES SOURCE` and exits `0` is decoration. Verification sets the exit status and triggers rollback. |
+| **Roll back by default; quarantine on request** | Deleting destroys the evidence exactly when the failure is interesting. |
+
+Failure modes and what each leaves behind:
+
+| Mode | On failure |
+|------|-----------|
+| default | stop if running → `security.protection.delete=false` → `incus delete --force` → report that nothing was left behind |
+| `--keep-failed` | stop → **remove the NIC** (`incus config device remove <t> eth0`) → `user.clone_state=failed` → say loudly that a human must reap it |
+
+Removing the NIC is what makes "somebody started it" survivable, and it is the honest place for `--no-profiles` reasoning: while the script runs, *stopped* is the guarantee and a defined NIC carries no traffic, so withholding the network protects nothing. Once the script has abandoned the artifact, that guarantee is gone and the network is the exposure. Same flag, opposite verdict, because the threat changed.
+
+Distinct exit codes, so a caller or CI can act without parsing prose:
+
+| Code | Meaning |
+|------|---------|
+| 0 | baked and verified |
+| 1 | refused by a guard — nothing was created |
+| 2 | failed, rolled back — nothing was left behind |
+| 3 | failed, **quarantined** — a human must reap it |
+
+Disable the trap inside the handler so a failing cleanup cannot recurse, and bound any step that can hang (a rebuild fetching from a dead cache) with `timeout` — an unbounded hang otherwise waits for a human, and with a trap that human's Ctrl-C becomes a clean rollback.
+
+> 💡 **Tip** - Look for this pattern already solved elsewhere in the repo you are editing. A backup module that builds a staging tree and atomically promotes it on success is the same contract at a different scale; cite it rather than re-arguing it.
 
 ## Verify the Clone
 
-Prove the clone is a new machine rather than asserting it. Compare each value against the source and report a mismatch loudly:
+Prove the outcome rather than trusting the command that set it. Verification is a gate, not a report: a mismatch sets the exit status and takes the rollback path.
+
+**Phase 1 — prove difference.** Compare each value against the source and report a mismatch loudly:
 
 ```bash
 incus --project <p> exec <clone> -- hostname                    # the clone's name, not the source's
 incus --project <p> exec <clone> -- cat /etc/machine-id         # differs from source
 incus --project <p> exec <clone> -- ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
-incus --project <p> config get <clone> security.protection.delete   # matches what you intended
+incus --project <p> config get <clone> security.protection.delete   # false
 ```
 
 For a mesh client, the daemon should be **running but unregistered** — enabled by config, with no valid identity. A clone reaching the *source's* management URL means the scrub missed something.
 
+**Phase 2 — prove absence, and prove it twice.** Difference checks cannot see authority; assert the credentials are gone, then assert the capability is gone:
+
+```bash
+incus --project <p> exec <clone> -- test ! -e /root/.ssh/id_ed25519
+incus --project <p> exec <clone> -- systemctl list-timers --all      # the subtracted timer is absent
+incus --project <p> exec <clone> -- ssh -o BatchMode=yes -o ConnectTimeout=5 <remote> true   # must FAIL
+```
+
+**Catch the credentials nobody documented.** An inventory only covers what its author knew; anything a configuration manager provisioned later is invisible to it. Scan the booted clone for secret-shaped paths and require every hit to be on an allowlist, so a new one fails the clone instead of shipping in it:
+
+```bash
+incus --project <p> exec <clone> -- \
+  find /root /home /var/lib -maxdepth 3 \
+    \( -name 'id_*' -o -name '*.env' -o -name '.pgpass' -o -name '.netrc' \) 2>/dev/null
+```
+
 > ⚠️ **Warning** - An unregistered mesh client reports one of **two** shapes, and a check that matches only one will silently pass while showing nothing. NetBird prints `Daemon status: NeedsLogin` when there is no config at all, or a `Management:` / `Signal:` table when config exists but is not connected. Match both, and print an explicit "could not read" rather than emitting nothing.
 
-A verification that can silently output nothing is worse than none, because it reads as success. The same applies to any state you *set*: assert the outcome afterward instead of trusting the command that set it.
+A verification that can silently output nothing is worse than none, because it reads as success.
+
+## Clone Script Checklist
+
+The purpose of this checklist is to author a clone script, and to audit one after the payload it clones has changed.
+
+This is important because a clone script goes stale silently: a new module, a new credential, or a new integration lands in the repo and the script keeps reporting success while the artifact it produces is no longer safe. **Treat this list as a first-class part of a `host-*`/`install-*` repo** — run it when you write the script, and again whenever the payload gains a `.nix` module, a secret, or an outbound integration. See `container-management/README.md` for where it sits in the repo-creation flow.
+
+**Guards — refuse before touching anything**
+
+- [ ] Refuses to name or write the source, and refuses the `-00` suffix
+- [ ] Validates the target name against Incus's rules before the copy starts
+- [ ] Refuses when an unfinished clone exists in the target project (the marker mutex)
+- [ ] Requires explicit approval: a TTY retype, or a `--confirm <name>` that must match
+- [ ] `--dry-run` prints the plan and changes nothing
+
+**Phase 1 — machine identity**
+
+- [ ] Every artifact in [What a Clone Inherits](#what-a-clone-inherits) marked phase 1 is scrubbed **while stopped**
+- [ ] The scrub helper distinguishes *absent* from *failed* and treats a failure as fatal
+- [ ] Host keys are re-scrubbed before the post-rebuild restart, so they regenerate under the right hostname
+- [ ] `security.protection.delete=false` is set **explicitly**, never inherited
+
+**Phase 2 — egress authority**
+
+- [ ] Every file in the repo's egress inventory is scrubbed, credentials **and** destination config
+- [ ] Every armed schedule is disarmed **declaratively**, by subtracting its module and import
+- [ ] A manifest classifies every `.nix` in the repo, and the script **refuses** when one is unclassified
+- [ ] The unclassified-secret scan runs against the booted clone, with an explicit allowlist
+
+**Artifact integrity**
+
+- [ ] The rollback trap is armed *before* the copy, and disarms itself inside the handler
+- [ ] `user.clone_state` is set at copy time and flipped to `complete` only after verification
+- [ ] No step downgrades a failure to a warning; opt-in tolerance is an explicit flag
+- [ ] Rollback deletes by default; `--keep-failed` quarantines with the NIC removed
+- [ ] Exit codes distinguish refused / rolled back / quarantined
+
+**Report and verification**
+
+- [ ] Verification proves difference *and* absence, and its result sets the exit status
+- [ ] No check can silently emit nothing on a read failure
+- [ ] The closing report names what was **not** done — that the clone is not sanitized (phase 3)
 
 Tags: #incus #clone #provisioning #nixos
