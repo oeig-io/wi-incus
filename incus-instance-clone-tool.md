@@ -242,6 +242,13 @@ A clone removes `myapp-backup-timer.nix` and its import; nothing else changes, a
 
 > ⚠️ **Warning** - Remove the import **first**, then delete the file, and do both **before** the reconciling rebuild. A `configuration.nix` that imports a missing module cannot rebuild at all — so this edit belongs inside the script's roll-back-able window, never as a manual afterthought.
 
+**Subtraction removes the declaration, not the unit — mind the first-boot window.** NixOS boots the generation the *source* built; `configuration.nix` is only input to a rebuild. A subtracted timer is therefore still live from the clone's first boot until the reconciling rebuild tears it down, and its boot delay can elapse inside that gap. There is no way to boot a container without timers: `systemd.mask=` lives on a kernel command line a container does not own, and an offline `/dev/null` mask cannot be written because `/etc/systemd/system` is a read-only symlink into `/etc/static/`. Two things close the gap instead:
+
+- **The payload budgets for it.** Every timer it ships carries a boot delay longer than a clone script needs to settle and disarm — see `container-management` → "Give Every Payload Timer a Clone Buffer", which owns the required value.
+- **The clone script disarms on first boot**, with a *runtime* mask (`systemctl mask --runtime --now`, which lands in `/run` and evaporates on the next restart), for the subtracted units only. Units that were kept are units someone decided a clone may run; stopping those would contradict the manifest.
+
+This one imperative act is not shadowing. Shadowing means runtime state that *contradicts* declared config; by that point config no longer declares the unit at all, so stopping it **agrees** with config. Keeping the mask in `/run` matters for the same reason verification runs after the restart: neither may be able to conceal a subtraction that silently failed.
+
 Because subtraction makes a module list load-bearing in three places — the installer that wires modules, the deploy script that verifies they are wired, and the clone script that removes some — keep **one manifest in the repo** that names each module and its clone disposition, and have all three read it. Three independent arrays drift, and the first symptom is a deploy script refusing to rebuild a clone for legitimately lacking a module.
 
 The same logic applies to stale rendered artifacts: when a clone's hostname is wrong because the rendered file predates the copy, **rebuild to regenerate it** — do not hand-edit. On NixOS the system enforces this for you: `/etc/hostname` is a symlink into the read-only `/etc/static/` tree. When a file resists being written, that is usually the platform telling you it is output rather than input — find the input.
@@ -357,6 +364,8 @@ This is important because a clone script goes stale silently: a new module, a ne
 
 - [ ] Every file in the repo's egress inventory is scrubbed, credentials **and** destination config
 - [ ] Every armed schedule is disarmed **declaratively**, by subtracting its module and import
+- [ ] Subtracted units are also masked at runtime on first boot, closing the window before the rebuild
+- [ ] Every timer the payload ships has a boot buffer larger than that window (see `container-management`)
 - [ ] A manifest classifies every `.nix` in the repo, and the script **refuses** when one is unclassified
 - [ ] The unclassified-secret scan runs against the booted clone, with an explicit allowlist
 
