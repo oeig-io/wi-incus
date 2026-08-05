@@ -15,6 +15,7 @@ metadata:
 
 - [Summary](#summary)
 - [Three Phases: Identity, Authority, Sanitization](#three-phases-identity-authority-sanitization)
+- [Leave the Clone a Way Back](#leave-the-clone-a-way-back)
 - [Check for a Dedicated Clone Script First](#check-for-a-dedicated-clone-script-first)
 - [Naming Clones](#naming-clones)
 - [Land Clones in Their Own Project](#land-clones-in-their-own-project)
@@ -54,6 +55,18 @@ Phases 1 and 2 point in opposite directions, and the asymmetry is what makes pha
 Because phase 1 artifacts are platform-owned, they form a finite list this skill can carry. Phase 2 artifacts are whatever the application was given, so no list can be complete — which is why phase 2 ships a *test* instead (see [What a Clone Inherits](#what-a-clone-inherits)).
 
 **A clone that has passed phases 1 and 2 is still not sanitized.** It holds the source's database passwords, un-obfuscated production data, and production badging. Say so explicitly when you report a clone as ready, so nobody infers more safety than was delivered.
+
+## Leave the Clone a Way Back
+
+The last act of a clone script should be to capture a **restore point inside the clone** — a database dump, a snapshot, whatever the application's own backup mechanism produces.
+
+This is important because a clone exists to be experimented on, and the first thing an experiment does is make the data unrecognisable. Without a local way back, the only route to a clean state is cloning production *again* — another full copy of production's data, another run of the script, and another window in which production is being read. A dump taken at clone time costs seconds and removes that.
+
+Three details decide whether it is worth having:
+
+- **Take it after the production posture is dropped**, so restoring it yields a clone rather than something that believes it is production again.
+- **It stays pinned, for free.** Subtracting the backup schedule (see [Subtract, Never Shadow](#subtract-never-shadow)) means nothing overwrites this snapshot on a timer the way it would on the source. The restore point remains the moment the clone was taken until someone refreshes it deliberately.
+- **Verify it, and fail the clone if it is missing.** A promised restore point that is not there is discovered at the worst possible moment. Offer a flag to skip the step rather than tolerating a silent absence.
 
 ## Check for a Dedicated Clone Script First
 
@@ -381,6 +394,7 @@ This is important because a clone script goes stale silently: a new module, a ne
 
 **Report and verification**
 
+- [ ] A restore point is captured inside the clone, after the posture drop, and verified
 - [ ] Verification proves difference *and* absence, and its result sets the exit status
 - [ ] No check can silently emit nothing on a read failure
 - [ ] The closing report names what was **not** done — that the clone is not sanitized (phase 3)
