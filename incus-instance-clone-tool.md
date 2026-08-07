@@ -91,11 +91,13 @@ Authoring a new one, or changing the payload an existing one clones, is governed
 ## Naming Clones
 
 ```
-<source-base>-clone[-<label>]-NN
+<source-base>-clone-<label>-NN
 ```
 
-- **source-base** is the source name minus any trailing `-NN`, so `idempiere-00` yields `idempiere-clone-NN` and `id-01` yields `id-clone-NN`.
-- **NN** starts at `01` and takes the lowest free value, allocated per prefix (a labelled series numbers independently).
+- **source-base** is the source name minus any trailing `-NN`, so `idempiere-00` yields `idempiere-clone-<label>-NN` and `id-01` yields `id-clone-<label>-NN`.
+- **label is required** — one word naming the clone's *purpose* (`uat`, `delme`, `upgrade-test`). It is the only part of the name that says *why the clone exists*, which is exactly what you need when deciding what to reap, so a clone script must refuse to run without one.
+- **A clone script must derive the whole name and refuse a free-form one.** The convention encodes provenance — what this is a clone *of*, and that it *is* a clone — and an arbitrary name silently discards it. A script that already refuses `-00` and the source's own name is guarding against a name that makes a *false* claim; an unconventional name makes a *missing* claim, which fails the same way but quietly. A clone that has earned its own identity has been promoted, not cloned: rename it then.
+- **NN** starts at `01` and takes the lowest free value, allocated per prefix (a labelled series numbers independently). Reuse after a reap is not a hazard here, because a reissued number carries the same label and therefore the same purpose.
 - **Never `-00`.** House convention reserves that suffix for a blessed production singleton; a clone must never wear it.
 
 Incus enforces its own rules on instance names (`shared/validate.IsHostname`), so validate before copying rather than failing mid-operation:
@@ -292,7 +294,7 @@ This is important because a clone is only safe while it is *stopped* — and a s
 | **Arm the rollback *before* the copy** | An interrupted copy leaves residue too. The pre-copy guard already proved the target did not exist, so deleting whatever is there is safe. |
 | **Mark the artifact itself** | `user.clone_state=in-progress` at copy time. A trap cannot survive `kill -9`, a host reboot, or a lost connection to the daemon; a marker on the object can, and it is what tells the *next* actor this thing is not finished. Put it in `description` too, since that is what `incus list` shows. |
 | **One commit point, at the end** | Verification passes → marker flips to `complete`. Nothing earlier may look like completion. |
-| **The marker doubles as a mutex** | Refuse to start when any container in the target project is not `complete`, naming it and the reap command. This also settles the number-allocation race, with no shared lock file. |
+| **The marker doubles as a mutex** | Refuse to start when any container in the target project is not `complete`, naming it and the reap command. This also narrows the number-allocation race with no shared lock file — though it does not close it: two runs can both pass the guard and pick the same `NN`. Incus's own name uniqueness is what makes the loser fail loudly at the copy instead of yielding two containers. |
 | **Warnings are not an exit path** | A boot that never settled, or a production flag that never got demoted, is a failed clone. Downgrading either to a warning and exiting `0` hands back a half-baked artifact that reads as good. Offer an explicit opt-in (`--allow-degraded`) rather than a silent tolerance. |
 | **Verification must be authoritative** | A check that prints `STILL MATCHES SOURCE` and exits `0` is decoration. Verification sets the exit status and triggers rollback. |
 | **Roll back by default; quarantine on request** | Deleting destroys the evidence exactly when the failure is interesting. |
@@ -363,10 +365,13 @@ This is important because a clone script goes stale silently: a new module, a ne
 **Guards — refuse before touching anything**
 
 - [ ] Refuses to name or write the source, and refuses the `-00` suffix
-- [ ] Validates the target name against Incus's rules before the copy starts
+- [ ] Requires a `--label` and derives the whole name; refuses a free-form name
+- [ ] Validates the derived name against Incus's rules before the copy starts
+- [ ] Refuses when the target project is the source's own project
 - [ ] Refuses when an unfinished clone exists in the target project (the marker mutex)
-- [ ] Requires explicit approval: a TTY retype, or a `--confirm <name>` that must match
 - [ ] `--dry-run` prints the plan and changes nothing
+
+**No approval prompt — deliberately.** Do not add one, and do not restore one you find removed. A clone script only ever *creates*: it refuses to write the source, refuses a name that already exists, and never touches the original (all above). So there is nothing to mis-target, and a retype-the-name gate protects nothing while training people to type past prompts — the same reflex argument that keeps `security.protection.delete` off a clone. Friction belongs on irreversible acts; a clone that should not exist costs one `incus delete`. `--dry-run` is the affordance for looking first, and the closing report is where the real cost belongs — another copy of un-sanitized production data, which is information to read, not a token to type.
 
 **Phase 1 — machine identity**
 
