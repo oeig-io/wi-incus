@@ -1,5 +1,5 @@
 ---
-name: incus-instance-clone
+name: incus-instance-clone-tool
 description: Clone an Incus instance and scrub the identity and outbound credentials it inherits before first boot, so the copy cannot impersonate its source or write to the source's external systems. Also the authority for authoring and auditing a repo's clone script, and the way to read or edit any STOPPED container's filesystem offline. Use when copying a production container, when a clone must not join a network or push to a backup target as its source, or when a container will not boot and needs an offline fix.
 compatibility: opencode
 metadata:

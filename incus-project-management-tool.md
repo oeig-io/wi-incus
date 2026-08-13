@@ -1,5 +1,5 @@
 ---
-name: incus-project-management
+name: incus-project-management-tool
 description: Instructions for creating and configuring incus projects with dedicated networks and profiles
 compatibility: opencode
 metadata:

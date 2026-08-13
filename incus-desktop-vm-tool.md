@@ -1,5 +1,5 @@
 ---
-name: incus-desktop-vm
+name: incus-desktop-vm-tool
 description: Enable a desktop environment in an Incus Linux virtual machine and connect to its graphical (VGA) console — COSMIC option paths and the cold-start attach pattern
 compatibility: opencode
 metadata:

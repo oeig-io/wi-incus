@@ -1,5 +1,5 @@
 ---
-name: incus-windows
+name: incus-windows-tool
 description: Install Windows in an incus VM using a driver-injected (repacked) ISO volume — reuse an existing project-scoped volume when present, or build and publish one with distrobuilder when not — plus the TPM 2.0 (vtpm), local-account, and guest-driver steps a Windows 11 install needs
 compatibility: opencode
 metadata:

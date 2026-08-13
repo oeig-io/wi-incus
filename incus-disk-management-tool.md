@@ -1,5 +1,5 @@
 ---
-name: incus-disk-management
+name: incus-disk-management-tool
 description: Configure Incus disks — map a host directory into a container, and observe ZFS disk usage across the Incus storage pool
 compatibility: opencode
 metadata:

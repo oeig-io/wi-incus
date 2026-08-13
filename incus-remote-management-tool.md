@@ -1,5 +1,5 @@
 ---
-name: incus-remote-management
+name: incus-remote-management-tool
 description: Instructions for how to configure incus remotes and project-scoped user access
 compatibility: opencode
 metadata:

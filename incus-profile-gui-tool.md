@@ -1,5 +1,5 @@
 ---
-name: incus-profile-gui
+name: incus-profile-gui-tool
 description: Incus profile configuration for running GUI desktop applications inside containers with X11 and PulseAudio forwarding
 compatibility: opencode
 metadata:
