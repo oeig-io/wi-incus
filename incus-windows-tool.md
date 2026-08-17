@@ -20,6 +20,7 @@ This is important because a stock Microsoft ISO does not contain virtio drivers,
 - [Decide: Build or Use](#decide-build-or-use)
 - [Why Repack](#why-repack)
 - [Build the Repacked ISO](#build-the-repacked-iso)
+  - [Repack on the incus Host (Debian/Ubuntu)](#repack-on-the-incus-host-debianubuntu)
   - [Create a Repack VM (not a Container)](#create-a-repack-vm-not-a-container)
   - [Obtain the Source ISOs](#obtain-the-source-isos)
   - [Repack](#repack)
@@ -78,13 +79,50 @@ Two facts about our environment drive this whole workflow:
 
 ## Build the Repacked ISO
 
+The repack loop-mounts the source ISOs, so it needs kernel mount privileges.
+Where that is possible decides where you run it:
+
+- **Client is the incus host itself** — repack directly on the host. On
+  Debian/Ubuntu: [Repack on the incus Host (Debian/Ubuntu)](#repack-on-the-incus-host-debianubuntu).
+  On NixOS: run the [Repack](#repack) `nix shell` command on the host instead
+  (with `sudo`, per the NixOS warning below), skipping the apt build and the VM.
+- **Client is our unprivileged LXC container** (cannot loop-mount; a privileged
+  container still lacks the host loop devices) — use a VM, the only reliable
+  place to run the repack: [Create a Repack VM (not a Container)](#create-a-repack-vm-not-a-container).
+
+### Repack on the incus Host (Debian/Ubuntu)
+
+Install the repack dependencies and build distrobuilder from source (it lands
+in `~/go/bin/distrobuilder`):
+
+```bash
+sudo apt install --no-install-recommends \
+  libhivex-bin libwin-hivex-perl wimtools genisoimage rsync libguestfs-tools
+sudo apt install -y golang-go make git
+
+tar xzf distrobuilder-3.3.1.tar.gz && cd distrobuilder-3.3.1/ && make
+```
+
+Put the Windows ISO and the virtio-win ISO (see [Obtain the Source ISOs](#obtain-the-source-isos))
+in the working directory, then repack with `sudo` (it loop-mounts) and import
+straight into the pool — because the client is the server, no remote/token
+round-trip is needed:
+
+```bash
+sudo ~/go/bin/distrobuilder repack-windows win11.iso win11-25h2-incus.iso
+incus storage volume import <pool> win11-25h2-incus.iso win11-25h2-incus --type=iso
+```
+
+Verify the result before publishing — see [Verify Driver Injection](#verify-driver-injection)
+(for the xorriso/wimlib commands, `apt install libisoburn wimtools` on the host).
+
 ### Create a Repack VM (not a Container)
 
 `distrobuilder repack-windows` loop-mounts the source ISO, which requires kernel
 mount privileges. Our incus client runs inside an unprivileged LXC container that
 cannot loop-mount (no `/dev/loop*`), and a privileged container still lacks the
-host loop devices. A **VM** has its own kernel and full loop support, so it is the
-only reliable place to run the repack.
+host loop devices. A **VM** has its own kernel and full loop support, so when the
+client is a container it is the only reliable place to run the repack.
 
 ```bash
 incus launch images:nixos/26.05 repack-vm --vm \
@@ -104,14 +142,17 @@ incus launch images:nixos/26.05 repack-vm --vm \
 
 ### Obtain the Source ISOs
 
-Get both ISOs onto the repack VM:
+Get both ISOs onto the repack machine:
 
 - **Windows ISO** — download from Microsoft, or attach an existing raw ISO volume
   to the VM and copy it to a file (`dd if=/dev/sr0 of=/root/win11.iso bs=4M`).
   Attaching a volume is host-local and far faster than pushing a multi-GB file
   through the client. See `incus-disk-management`.
 - **virtio drivers ISO** — download the stable `virtio-win.iso` from the
-  fedorapeople virtio-win archive directly inside the VM (it has internet).
+  fedorapeople virtio-win archive directly on the repack machine (it has internet):
+  `https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso`.
+  Keep it in the working directory — the repack uses it next, and the guest-driver
+  install reuses it later.
 
 ### Repack
 
@@ -145,14 +186,23 @@ sudo nix --extra-experimental-features "nix-command flakes" shell nixpkgs#libiso
 A genisoimage `install.wim.staging... No such file` warning during repack is benign
 as long as `install.wim` (multi-GB) is present in the verification output.
 
+> 💡 **Tip** - `--drivers` is optional: it defaults to `virtio-win.iso` in the
+> working directory, so the flag can be omitted when the ISO is already there
+> (distrobuilder resolves or fetches it when absent). Pass `--windows-version` and
+> `--windows-arch` only when the ISO filename does not already encode them —
+> distrobuilder auto-detects both from the filename.
+
 ## Publish the ISO as a Storage Volume
 
 ### Import Into the First Project
 
-`incus storage volume import` uploads from the client filesystem to the server. The
-file lives on the repack VM, and pulling it back through the client is slow. Instead,
-let the **VM import the volume itself** over the server's LAN. Grant the VM trust with
-a token and add the server as a remote (see `incus-remote-management`), then:
+`incus storage volume import` uploads from the client filesystem to the server.
+When you repacked **on the incus host**, the import shown there already published
+the volume — skip straight to [Copy to Additional Projects](#copy-to-additional-projects)
+if needed. Otherwise the file lives on the repack VM, and pulling it back through
+the client is slow. Instead, let the **VM import the volume itself** over the
+server's LAN. Grant the VM trust with a token and add the server as a remote
+(see `incus-remote-management`), then:
 
 ```bash
 incus exec repack-vm -- bash -c '
@@ -240,6 +290,9 @@ opens immediately and you can catch the boot prompt on the very first attempt:
 incus start <vm> --console=vga   # powers on AND attaches the SPICE display
 ```
 
+Expect the installer image to take **three minutes or more** to reach the boot
+prompt — this is normal, not a hang.
+
 When the `remote-viewer` window appears, **click into it** to grab the keyboard, then
 **hold the spacebar** so key-repeat lands inside the brief "Press any key to boot
 from CD or DVD..." window. Release once "Windows Setup is loading files" / the spinner
@@ -291,10 +344,20 @@ incus storage volume detach <pool> win11-25h2-incus <vm>
 
 ### Install Guest Drivers
 
-Windows boots with a low fixed resolution until guest drivers are installed. Attach the
-same `virtio-win.iso` used for the repack as a second CD-ROM (see
-`incus-disk-management`) or download it inside the guest, then run its guest-tools
-installer and reboot.
+Windows boots with a low fixed resolution until guest drivers are installed.
+Import the virtio-win ISO as a project volume (it is the same ISO used for the
+repack — see [Obtain the Source ISOs](#obtain-the-source-isos)), attach it as a
+CD-ROM, run its guest-tools installer, reboot, then detach:
+
+```bash
+incus storage volume import <pool> virtio-win.iso virtio-win --type=iso
+incus config device add <vm> drivers disk pool=<pool> source=virtio-win
+# in Windows: run virtio-win-guest-tools.exe from the attached CD, then reboot
+incus config device remove <vm> drivers
+```
+
+Alternatively download the ISO inside the guest (see `incus-disk-management` for
+volume attach/detach mechanics).
 
 > ⚠️ **Warning** - SPICE Guest Tools alone does **not** fix the display in our VMs; the
 > virtio-win guest tools do. Install virtio-win first, and add SPICE Guest Tools only
