@@ -331,7 +331,7 @@ Current Windows 11 Pro builds offer no visible local-account path and dead-end a
 "Let's add your Microsoft account". Bypass it from the installer itself:
 
 1. [ ] At the Microsoft account screen, press **Shift+F10** to open a command prompt
-1. [ ] Run `ms-cxh:localonly`
+1. [ ] Run `start ms-cxh:localonly`
 1. [ ] Enter the local user name, password, and security questions
 
 Setup then completes to the desktop. Detach the ISO so the VM boots from disk:
