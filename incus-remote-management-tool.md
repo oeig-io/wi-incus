@@ -20,10 +20,12 @@ https://github.com/zabbly/incus
 
 ## Add a New Remote Server
 
-On the client - get/generate a certificate. Note this is a public key. It is OK to pass in plain text.
+On the client - get/generate a certificate. Note this is a public key. It is OK to pass in plain text. Keep it under your private `$TMPDIR`, never directly in `/tmp/` on a shared host. The certificate is per-user: it is generated in the current user's `~/.config/incus/` and authenticates only that user, so each user of a shared machine needs their own certificate added to the server.
+
+> ⚠️ **Warning** - Do not share one credential across users via a global remote config (`/etc/incus/config.yml` with `clientcerts/`) - it authenticates every user of the machine and must not be used in a shared environment.
 
 ```
-incus remote get-client-certificate | tee /tmp/cert.txt
+incus remote get-client-certificate | tee $TMPDIR/cert.txt
 ```
 
 On the server - add the client certificate
@@ -78,7 +80,7 @@ To give a user access to a specific project without granting full admin privileg
 The user runs this on their client machine and shares the output with the admin:
 
 ```
-incus remote get-client-certificate | tee /tmp/cert.txt
+incus remote get-client-certificate | tee $TMPDIR/cert.txt
 ```
 
 ### Add Restricted Certificate
@@ -95,7 +97,7 @@ To grant access to multiple projects, use a comma-separated list:
 incus config trust add-certificate /path/to/user-cert.txt --projects acme,plantos --restricted
 ```
 
-> **📝 Note** - You can also use token-based authentication (`incus config trust add --projects acme --restricted`) where the user redeems a one-time token instead of sharing their certificate file.
+> **📝 Note** - You can also use token-based authentication (`incus config trust add --projects acme --restricted`) where the user redeems a one-time token instead of sharing their certificate file. The user redeems it with `incus remote add <remote-name> <token>`; tokens expire after `core.remote_token_expiry` or first use.
 
 ### Verify Restricted Access
 
@@ -112,6 +114,12 @@ incus config trust edit <fingerprint>
 ```
 
 Ensure `restricted` is `true` and the `projects` list contains only the intended projects. To grant access to additional projects later, add them to the `projects` list — no client-side changes are needed.
+
+To revoke a client's access entirely, remove its certificate from the server (find the fingerprint with `incus config trust list`):
+
+```
+incus config trust remove <fingerprint>
+```
 
 ### User Connects to the Remote
 
