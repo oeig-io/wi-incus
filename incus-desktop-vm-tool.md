@@ -56,7 +56,7 @@ flatpak remote-add --user flathub https://dl.flathub.org/repo/flathub.flatpakrep
 ## Create a login user
 
 The greeter needs an account to log into. Create one imperatively — see
-`wi-nixos/nixos-best-practices-tool.md` → "Creating Users as Data (Imperative useradd)".
+`wi-nixos/nixos-oeig-practices-tool.md` → "Creating Users as Data (Imperative useradd)".
 
 ## Connect: cold-start with the VGA console
 
@@ -107,7 +107,7 @@ All of these still ride on `cosmic-comp` getting a graphical context in the VM �
 - Remote SPICE via the Incus client (confirmed working): https://discuss.linuxcontainers.org/t/remote-viewer-for-vm-console-spice-over-ip/21480
 - COSMIC RemoteDesktop portal gap (open): https://github.com/pop-os/xdg-desktop-portal-cosmic/issues/23
 - Experimental COSMIC RDP server (NixOS module): https://github.com/olafkfreund/cosmic-ext-rdp-server
-- Login user creation — `wi-nixos/nixos-best-practices-tool.md`
+- Login user creation — `wi-nixos/nixos-oeig-practices-tool.md`
 - Sibling tools — `incus-profile-gui-tool.md` (containers), `incus-windows-tool.md` (Windows VM)
 - Authoring standard — `wi-base/WORK_INSTRUCTIONS.md`
 
