@@ -1,6 +1,6 @@
 ---
 name: incus-disk-management-tool
-description: Configure Incus disks — map a host directory into a container, and observe ZFS disk usage across the Incus storage pool
+description: Configure Incus disks — map a host directory into a container, resize a running instance's root disk, and observe ZFS disk usage across the Incus storage pool
 compatibility: opencode
 metadata:
   type: tool
@@ -25,6 +25,38 @@ X_DISK_DESTINATION=/path/in/container
 X_DISK_LABEL=some-description    #no spaces
 incus config device add $X_INCUS_INSTANCE "$X_INCUS_INSTANCE"-"$X_DISK_LABEL" disk source=$X_DISK_SOURCE  path=$X_DISK_DESTINATION shift=true
 ```
+
+## Resize Disk of a Running Instance
+
+The purpose of this section is to change a disk's quota while the instance
+runs. This is important because Incus hot-applies the new size to the ZFS
+dataset — no restart, no raw `zfs set quota=` — so a quota'd container at
+0B free can be unblocked without downtime.
+
+```
+X_DISK_INSTANCE=instance-name
+X_DISK_PROJECT=project-name    #e.g. oeig-prod
+X_DISK_DEVICE=root              #the disk to resize; almost always "root"
+X_DISK_SIZE=200GB                #decimal (matches incus convention); use GiB for binary
+incus --project "$X_DISK_PROJECT" config device set "$X_DISK_INSTANCE" "$X_DISK_DEVICE" size="$X_DISK_SIZE"
+```
+
+> 💡 **Tip** - `set` edits a device defined **on the instance**. If the device
+> is **inherited from a profile** only, incus refuses ("Override device or
+> modify profile instead") — run once with
+> `incus config device override "$X_DISK_INSTANCE" "$X_DISK_DEVICE" size="$X_DISK_SIZE"`
+> to promote it onto the instance, then `set` works thereafter.
+
+Verify the change via the incus CLI:
+
+```bash
+incus --project "$X_DISK_PROJECT" config show "$X_DISK_INSTANCE" \
+  | grep -A1 "size:"
+```
+
+> ⚠️ **Warning** - Raising a quota is non-destructive; shrinking below
+> `USED` fails with the storage driver's "cannot be shrunk" error. For a
+> container at 0B free this matters only if you intend to lower the cap.
 
 ## Observe Disk Usage
 
@@ -72,3 +104,5 @@ For everything general about ZFS (what fragmentation is, snapshot vs. clone
 accounting, capacity thresholds), rely on standard ZFS knowledge rather than
 repeating it here. To attach or detach the underlying disk device, see the
 Map Disk Between Host and Container section above.
+
+Tags: #incus #disk #zfs #storage
