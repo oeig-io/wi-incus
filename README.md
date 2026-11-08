@@ -15,12 +15,16 @@ Authoring and formatting follow `wi-base/WORK_INSTRUCTIONS.md`.
 
 **Tasks**
 
+- `incus-backup-task.md` — choose snapshot, copy, or export by what the
+  restore must survive
 - `incus-environment-management-task.md` — bring an Incus environment up/down
 - `incus-profile-management-task.md` — apply and adjust instance profiles
 
 **Tools**
 
 - `incus-container-management-tool.md` — configure containers
+- `incus-export-import-tool.md` — export to a file or stream to rsync.net
+  age-encrypted, and import back; covers 6.0-client stdin/stdout gaps
 - `incus-disk-management-tool.md` — map a host disk into a container, and
   observe ZFS disk usage across the shared storage pool
 - `incus-instance-clone-tool.md` — clone an instance and scrub the identity and
